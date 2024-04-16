@@ -1,153 +1,254 @@
+; Variables
+
+; Init variables here
+
+;;; Important Registers
+
+; PPU
+
+PPU_CTRL    =   $2000
+PPU_MASK    =   $2001
+PPU_STATUS  =   $2002
+OAM_ADDR    =   $2003
+OAM_DATA    =   $2004
+PPU_SCROLL  =   $2005
+PPU_ADDR    =   $2006
+PPU_DATA    =   $2007
+OAM_DMA     =   $4014
+
+; APU
+
+SQ1_VOL     =   $4000
+SQ1_LO      =   $4002
+SQ1_HI      =   $4003
+APU_STATUS  =   $4015
+
+; CONTROLLER INPUT
+
+JOY1        =   $4016
+
+
 .segment "HEADER"
-  ; .byte "NES", $1A      ; iNES header identifier
-  .byte $4E, $45, $53, $1A
-  .byte 2               ; 2x 16KB PRG code
-  .byte 1               ; 1x  8KB CHR data
-  .byte $01, $00        ; mapper 0, vertical mirroring
+	.byte 	"NES", $1A
+	.byte 	2
+	.byte	1
+	.byte 	$01, $00
 
-.segment "VECTORS"
-  ;; When an NMI happens (once per frame if enabled) the label nmi:
-  .addr nmi
-  ;; When the processor first turns on or is reset, it will jump to the label reset:
-  .addr reset
-  ;; External interrupt IRQ (unused)
-  .addr 0
-
-; "nes" linker config requires a STARTUP section, even if it's empty
 .segment "STARTUP"
 
-; Main code segement for the program
+
 .segment "CODE"
 
 reset:
-  sei		; disable IRQs
-  cld		; disable decimal mode
-  ldx #$40
-  stx $4017	; disable APU frame IRQ
-  ldx #$ff 	; Set up stack
-  txs		;  .
-  inx		; now X = 0
-  stx $2000	; disable NMI
-  stx $2001 	; disable rendering
-  stx $4010 	; disable DMC IRQs
+	sei			; disable IRQs
+	cld			; disable decimal mode
+;	ldx #$40
+;	stx $4017	; disable APU frame IRQ
+	ldx #$FF
+	txs			; set up stack
+	inx			; now X = 0
+	lda PPU_STATUS
+	ldx #%00000000
+	stx	PPU_CTRL	; disable NMI
+	ldx #%00000000
+	stx PPU_MASK	; disable rendering
+;	stx $4010	; disable DMC IRQs
 
-;; first wait for vblank to make sure PPU is ready
-vblankwait1:
-  bit $2002
-  bpl vblankwait1
+	lda PPU_STATUS	; PPU warm up
 
-clear_memory:
-  lda #$00
-  sta $0000, x
-  sta $0100, x
-  sta $0200, x
-  sta $0300, x
-  sta $0400, x
-  sta $0500, x
-  sta $0600, x
-  sta $0700, x
-  inx
-  bne clear_memory
+vblankwait1:	; First wait for vblank to make sure PPU is ready
+	bit PPU_STATUS	; PPU status register
+	bpl vblankwait1
 
-;; second wait for vblank, PPU is ready after this
 vblankwait2:
-  bit $2002
-  bpl vblankwait2
+	bit PPU_STATUS
+	bpl vblankwait2
 
-main:
-load_palettes:
-  lda $2002
-  lda #$3f
-  sta $2006
-  lda #$00
-  sta $2006
-  ldx #$00
-@loop:
-  lda palettes, x
-  sta $2007
-  inx
-  cpx #$20
-  bne @loop
+	lda #$00
+	ldx #$00
+clear_memory:
+	sta $0000, X
+	sta $0100, X
+	sta $0200, X
+	sta $0300, X
+	sta $0400, X
+	sta $0500, X
+	sta $0600, X
+	sta $0700, X
+	inx
+	cpx #$00
+	bne clear_memory
 
-enable_rendering:
-  lda #%10000000	; Enable NMI
-  sta $2000
-  lda #%00010000	; Enable Sprites
-  sta $2001
+
+; Loading nametable
+	lda PPU_STATUS 	; reading PPUSTATUS
+	lda #$20	; writing 0x2000 in PPUADDR to write on PPU, the address for nametable 0
+	sta PPU_ADDR
+	lda #$00
+	sta PPU_ADDR
+	lda #<background_nametable	; saving nametable in RAM
+	sta $0000
+	lda #>background_nametable
+	sta $0001
+	ldx #$00
+	ldy #$00
+
+nametable_loop:
+	lda ($00), Y
+	sta PPU_DATA
+	iny
+	cpy #$00
+	bne nametable_loop
+	inc $0001
+	inx
+	cpx #$04	; size of nametable 0: 0x0400
+	bne nametable_loop
+
+	; Color setup for background
+	lda PPU_STATUS
+	lda #$3F	; writing 0x3F00, pallete RAM indexes
+	sta PPU_ADDR
+	lda #$00
+	sta PPU_ADDR
+	ldx #$00
+
+background_color_loop:
+	lda background_pallete, X
+	sta PPU_DATA
+	inx
+	cpx #$10	; size of pallete RAM: 0x0020, until 0x3F10 is background palletes
+	bne background_color_loop	; after 0x3F10, there should be sprite palletes
+
+; Sprites color setup
+	lda PPU_STATUS
+	lda #$3F
+	sta PPU_ADDR
+	lda #$10
+	sta PPU_ADDR
+	ldx #$00
+sprite_color_loop:
+	lda background_pallete, X
+	sta PPU_DATA
+	inx
+	cpx #$10
+	bne sprite_color_loop
+
+; Code for reseting scroll
+	lda #$00
+	sta PPU_SCROLL
+	lda #$00
+	sta PPU_SCROLL
+
+; Turning on NMI and rendering
+	lda #%10010000
+	sta PPU_CTRL	; PPUCTRL
+	lda #%00011010	; show background
+	sta PPU_MASK	; PPUMASK, controls rendering of sprites and backgrounds
+
+
 
 forever:
-  jmp forever
+	
+; Reading input data
+
+	lda #$01
+	sta JOY1
+	lda #$00
+	sta JOY1
+
+; A
+	lda JOY1
+	and #%00000001
+	cmp #%00000001
+	bne A_not_pressed
+
+A_not_pressed:
+
+; B
+	lda JOY1
+	and #%00000001
+	cmp #%00000001
+	bne B_not_pressed
+
+B_not_pressed:
+
+; Select
+	lda JOY1
+	and #%00000001
+	cmp #%00000001
+	bne Select_not_pressed
+
+Select_not_pressed:
+
+; Start
+	lda JOY1
+	and #%00000001
+	cmp #%00000001
+	bne Start_not_pressed
+
+Start_not_pressed:
+
+; Up
+	lda JOY1
+	and #%00000001
+	cmp #%00000001
+	bne Up_not_pressed
+
+
+Up_not_pressed:
+
+; Down
+	lda JOY1
+	and #%00000001
+	cmp #%00000001
+	bne Down_not_pressed
+
+
+Down_not_pressed:
+
+; Left
+	lda JOY1
+	and #%00000001
+	cmp #%00000001
+	bne Left_not_pressed
+
+Left_not_pressed:
+
+; Right
+	lda JOY1
+	and #%00000001
+	cmp #%00000001
+	bne Right_not_pressed
+
+Right_not_pressed:
+	jmp	forever
 
 nmi:
-  ldx #$00 	; Set SPR-RAM address to 0
-  stx $2003
-@loop:	lda hello, x 	; Load the hello message into SPR-RAM
-  sta $2004
-  inx
-  cpx #$1c
-  bne @loop
-  rti
+nmi_logic:
+nmi_sprites:
+	lda #$00
+	sta OAM_ADDR
+	lda #$02
+	sta OAM_DMA
 
-hello:
-  .byte $00, $00, $00, $00 	; Why do I need these here?
-  .byte $00, $00, $00, $00
-  .byte $6c, $00, $00, $6c
-  .byte $6c, $01, $00, $76
-  .byte $6c, $02, $00, $80
-  .byte $6c, $02, $00, $8A
-  .byte $6c, $03, $00, $94
+	rti
 
-palettes:
-  ; Background Palette
-  .byte $0f, $00, $00, $00
-  .byte $0f, $00, $00, $00
-  .byte $0f, $00, $00, $00
-  .byte $0f, $00, $00, $00
+irq:
+	rti
 
-  ; Sprite Palette
-  .byte $0f, $20, $00, $00
-  .byte $0f, $00, $00, $00
-  .byte $0f, $00, $00, $00
-  .byte $0f, $00, $00, $00
+background_nametable:
+	.incbin "backgrounds/bk1.nam"
 
-; Character memory
+background_pallete:
+	.incbin "backgrounds/bag.pal"
+
+
+;.segment "RODATA"
+
+.segment "VECTORS"
+	.word nmi		; when non-maskable interrupt happens, goes to label nmi
+	.word reset		; when the processor first turns on or is reset, goes to reset
+	.word irq		; using external interrupt IRQ
+
 .segment "CHARS"
-  .byte %11000011	; H (00)
-  .byte %11000011
-  .byte %11000011
-  .byte %11111111
-  .byte %11111111
-  .byte %11000011
-  .byte %11000011
-  .byte %11000011
-  .byte $00, $00, $00, $00, $00, $00, $00, $00
-
-  .byte %11111111	; E (01)
-  .byte %11111111
-  .byte %11000000
-  .byte %11111100
-  .byte %11111100
-  .byte %11000000
-  .byte %11111111
-  .byte %11111111
-  .byte $00, $00, $00, $00, $00, $00, $00, $00
-
-  .byte %11000000	; L (02)
-  .byte %11000000
-  .byte %11000000
-  .byte %11000000
-  .byte %11000000
-  .byte %11000000
-  .byte %11111111
-  .byte %11111111
-  .byte $00, $00, $00, $00, $00, $00, $00, $00
-
-  .byte %01111110	; O (03)
-  .byte %11100111
-  .byte %11000011
-  .byte %11000011
-  .byte %11000011
-  .byte %11000011
-  .byte %11100111
-  .byte %01111110
-  .byte $00, $00, $00, $00, $00, $00, $00, $00
+	.incbin "chr/mario.chr"	; includes 8KB graphics
